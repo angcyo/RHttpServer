@@ -1,0 +1,7 @@
+apply from: '../lib/lib_base.gradle'
+
+dependencies {
+    api fileTree(dir: 'libs', include: ['*.jar'])
+
+    api 'com.koushikdutta.async:androidasync:2.2.1'
+}
