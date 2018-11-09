@@ -3,6 +3,8 @@ package com.angcyo.httpserver;
 import android.util.Log;
 import android.util.SparseArray;
 import com.koushikdutta.async.callback.CompletedCallback;
+import com.koushikdutta.async.http.Multimap;
+import com.koushikdutta.async.http.body.AsyncHttpRequestBody;
 import com.koushikdutta.async.http.server.AsyncHttpServer;
 import com.koushikdutta.async.http.server.AsyncHttpServerRequest;
 import com.koushikdutta.async.http.server.AsyncHttpServerResponse;
@@ -98,19 +100,50 @@ public class RServer implements HttpServerRequestCallback {
     public void onRequest(AsyncHttpServerRequest request, AsyncHttpServerResponse response) {
         //AsyncServer 线程
         log("进来了，哈哈" + request.getHeaders().get("Host"));
-        response.send(response.code() + " :" + request.getHeaders().get("Host") + " :" + request.getPath() + " :" + request.getBody());
+        StringBuilder builder = new StringBuilder();
+
+        String ua = request.getHeaders().get("user-agent");
+        //        response.send(response.code() + " :" + request.getHeaders().get("Host") + " :" + request.getPath() + " :" + request.getBody());
         //response.redirect("http://www.baidu.com");
-        response.end();
+//        response.end();
 
 //        String uri = request.getPath();
 //        //这个是获取header参数的地方，一定要谨记哦
-//        Multimap headers = request.getHeaders().getMultiMap();
+        Multimap headers = request.getHeaders().getMultiMap();
 //
 //        //注意：这个地方是获取post请求的参数的地方，一定要谨记哦
-//        Multimap parms = ((AsyncHttpRequestBody<Multimap>) request.getBody()).get();
+        Multimap parms = ((AsyncHttpRequestBody<Multimap>) request.getBody()).get();
 //
-//        response.send("send1:" + headers + " " + parms);
-//        response.send("send2:" + request + " " + response);
+
+//        response.send("a</br>b");
+//        response.end();
+
+        builder.append(headers);
+        builder.append("</br>");
+        builder.append(parms);
+        builder.append("</br>");
+
+        if (ua.contains("MQQBrowser")) {
+            //腾讯tbs x5内核浏览器,腾讯体系
+            if (ua.contains("QQ/")) {
+                builder.append("QQ客户端");
+
+                response.redirect("http://pay.hotapp.cn/108659959");
+            } else if (ua.contains("MicroMessenger")) {
+                builder.append("微信客户端");
+
+                response.redirect("wxp://f2f0nuJx2qnA2ibH8hKgVQ4c2dWHsyy3-tej");
+            }
+        } else if (ua.contains("UCBrowser")) {
+            //UC 浏览器内核,支付宝体系
+            if (ua.contains("AlipayClient")) {
+                builder.append("支付宝客户端");
+
+                response.redirect("http://pay.hotapp.cn/108659959");
+            }
+        }
+
+        response.send(builder.toString());
     }
 
     private void log(String log) {
