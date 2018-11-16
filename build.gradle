@@ -3,5 +3,8 @@ apply from: '../lib/lib_base.gradle'
 dependencies {
     api fileTree(dir: 'libs', include: ['*.jar'])
 
-    api 'com.koushikdutta.async:androidasync:2.2.1'
+//    api 'com.koushikdutta.async:androidasync:2.2.1'
+
+    compileOnly group: 'org.bouncycastle', name: 'bcprov-jdk15on', version: '1.60'
+    compileOnly group: 'org.bouncycastle', name: 'bcpkix-jdk15on', version: '1.60'
 }
