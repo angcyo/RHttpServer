@@ -177,7 +177,7 @@ public class RServer implements HttpServerRequestCallback {
             } else if (obj != null) {
                 logBuilder.append(obj.getClass().getSimpleName());
                 logBuilder.append("->");
-                logBuilder.append(obj);
+                shortString(logBuilder, obj.toString());
             }
         }
 
@@ -250,7 +250,23 @@ public class RServer implements HttpServerRequestCallback {
             builder.append("\n");
             builder.append(nameValuePair.getName());
             builder.append(":");
-            builder.append(nameValuePair.getValue());
+            shortString(builder, nameValuePair.getValue());
+        }
+    }
+
+    private static void shortString(StringBuilder builder, String value) {
+        int max_length = 1024;
+        int length = -1;
+        if (value == null) {
+        } else {
+            length = value.length();
+        }
+        if (length > max_length) {
+            builder.append(value.substring(0, max_length));
+            builder.append("数据过长, 剩余:");
+            builder.append(length - max_length);
+        } else {
+            builder.append(value);
         }
     }
 
