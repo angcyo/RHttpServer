@@ -254,7 +254,13 @@ public class RServer implements HttpServerRequestCallback {
         }
     }
 
-    private static void shortString(StringBuilder builder, String value) {
+    public static String shortString(String value) {
+        StringBuilder builder = new StringBuilder();
+        shortString(builder, value);
+        return builder.toString();
+    }
+
+    public static void shortString(StringBuilder builder, String value) {
         int max_length = 1024;
         int length = -1;
         if (value == null) {
@@ -266,7 +272,9 @@ public class RServer implements HttpServerRequestCallback {
             builder.append("数据过长, 剩余:");
             builder.append(length - max_length);
         } else {
-            builder.append(value);
+            if (value != null) {
+                builder.append(value);
+            }
         }
     }
 
