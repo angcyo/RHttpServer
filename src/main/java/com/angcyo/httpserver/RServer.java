@@ -15,6 +15,10 @@ import java.io.UnsupportedEncodingException;
 import java.net.URLDecoder;
 import java.util.Iterator;
 
+/**
+ * https://github.com/koush/AndroidAsync
+ * 2019-03-10
+ */
 public class RServer implements HttpServerRequestCallback {
 
     private static final String TAG = "RServer";
