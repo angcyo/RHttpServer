@@ -18,6 +18,7 @@ import com.koushikdutta.async.http.Protocol;
 import com.koushikdutta.async.http.filter.ChunkedOutputFilter;
 import com.koushikdutta.async.util.StreamUtility;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
@@ -26,6 +27,7 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
 import java.io.UnsupportedEncodingException;
+import java.nio.ByteBuffer;
 import java.util.Locale;
 
 public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
@@ -41,6 +43,11 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
         return mSocket;
     }
 
+    @Override
+    public void setSocket(AsyncSocket socket) {
+        mSocket = socket;
+    }
+
     AsyncSocket mSocket;
     AsyncHttpServerRequestImpl mRequest;
     AsyncHttpServerResponseImpl(AsyncSocket socket, AsyncHttpServerRequestImpl req) {
@@ -48,6 +55,11 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
         mRequest = req;
         if (HttpUtil.isKeepAlive(Protocol.HTTP_1_1, req.getHeaders()))
             mRawHeaders.set("Connection", "Keep-Alive");
+    }
+
+    @Override
+    public AsyncHttpServerRequest getRequest() {
+        return mRequest;
     }
 
     @Override
@@ -97,7 +109,7 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
             isChunked = false;
         }
 
-        String statusLine = String.format(Locale.ENGLISH, "HTTP/1.1 %s %s", code, AsyncHttpServer.getResponseCodeDescription(code));
+        String statusLine = String.format(Locale.ENGLISH, "%s %s %s", httpVersion, code, AsyncHttpServer.getResponseCodeDescription(code));
         String rh = mRawHeaders.toPrefixString(statusLine);
 
         Util.writeAll(mSocket, rh.getBytes(), new CompletedCallback() {
@@ -199,21 +211,28 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
 
     @Override
     public void send(final String contentType, final byte[] bytes) {
-        assert mContentLength < 0;
-        getServer().post(new Runnable() {
-            @Override
-            public void run() {
-                mContentLength = bytes.length;
-                mRawHeaders.set("Content-Length", Integer.toString(bytes.length));
+        send(contentType, new ByteBufferList(bytes));
+    }
+
+    @Override
+    public void send(String contentType, ByteBuffer bb) {
+        send(contentType, new ByteBufferList(bb));
+    }
+
+    @Override
+    public void send(String contentType, ByteBufferList bb) {
+        getServer().post(() -> {
+            mContentLength = bb.remaining();
+            mRawHeaders.set("Content-Length", Long.toString(mContentLength));
+            if (contentType != null)
                 mRawHeaders.set("Content-Type", contentType);
 
-                Util.writeAll(AsyncHttpServerResponseImpl.this, bytes, new CompletedCallback() {
-                    @Override
-                    public void onCompleted(Exception ex) {
-                        onEnd();
-                    }
-                });
-            }
+            Util.writeAll(AsyncHttpServerResponseImpl.this, bb, new CompletedCallback() {
+                @Override
+                public void onCompleted(Exception ex) {
+                    onEnd();
+                }
+            });
         });
     }
 
@@ -247,6 +266,11 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
     @Override
     public void send(JSONObject json) {
         send("application/json; charset=utf-8", json.toString());
+    }
+
+    @Override
+    public void send(JSONArray jsonArray) {
+        send("application/json; charset=utf-8", jsonArray.toString());
     }
 
     @Override
@@ -292,6 +316,12 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
             mRawHeaders.set("Accept-Ranges", "bytes");
             if (mRequest.getMethod().equals(AsyncHttpHead.METHOD)) {
                 writeHead();
+                onEnd();
+                return;
+            }
+            if (mContentLength == 0) {
+                writeHead();
+                StreamUtility.closeQuietly(inputStream);
                 onEnd();
                 return;
             }
@@ -366,6 +396,17 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
         end();
     }
 
+    String httpVersion = "HTTP/1.1";
+    @Override
+    public String getHttpVersion() {
+        return httpVersion;
+    }
+
+    @Override
+    public void setHttpVersion(String httpVersion) {
+        this.httpVersion = httpVersion;
+    }
+
     @Override
     public void onCompleted(Exception ex) {
         end();
@@ -403,7 +444,7 @@ public class AsyncHttpServerResponseImpl implements AsyncHttpServerResponse {
     public String toString() {
         if (mRawHeaders == null)
             return super.toString();
-        String statusLine = String.format(Locale.ENGLISH, "HTTP/1.1 %s %s", code, AsyncHttpServer.getResponseCodeDescription(code));
+        String statusLine = String.format(Locale.ENGLISH, "%s %s %s", httpVersion, code, AsyncHttpServer.getResponseCodeDescription(code));
         return mRawHeaders.toPrefixString(statusLine);
     }
 }

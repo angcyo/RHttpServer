@@ -13,6 +13,7 @@ import com.koushikdutta.async.http.Multimap;
 import com.koushikdutta.async.http.Protocol;
 import com.koushikdutta.async.http.body.AsyncHttpRequestBody;
 
+import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
 
@@ -20,6 +21,12 @@ public abstract class AsyncHttpServerRequestImpl extends FilteredDataEmitter imp
     private String statusLine;
     private Headers mRawHeaders = new Headers();
     AsyncSocket mSocket;
+    private HashMap<String, Object> state = new HashMap<>();
+
+    @Override
+    public HashMap<String, Object> getState() {
+        return state;
+    }
 
     public String getStatusLine() {
         return statusLine;
@@ -48,37 +55,40 @@ public abstract class AsyncHttpServerRequestImpl extends FilteredDataEmitter imp
     protected AsyncHttpRequestBody onUnknownBody(Headers headers) {
         return null;
     }
+    protected AsyncHttpRequestBody onBody(Headers headers) {
+        return null;
+    }
+
     
     StringCallback mHeaderCallback = new StringCallback() {
         @Override
         public void onStringAvailable(String s) {
-            try {
-                if (statusLine == null) {
-                    statusLine = s;
-                    if (!statusLine.contains("HTTP/")) {
-                        onNotHttp();
-                        mSocket.setDataCallback(null);
-                    }
+            if (statusLine == null) {
+                statusLine = s;
+                if (!statusLine.contains("HTTP/")) {
+                    onNotHttp();
+                    mSocket.setDataCallback(null);
                 }
-                else if (!"\r".equals(s)){
-                    mRawHeaders.addLine(s);
-                }
-                else {
-                    DataEmitter emitter = HttpUtil.getBodyDecoder(mSocket, Protocol.HTTP_1_1, mRawHeaders, true);
-//                    emitter.setEndCallback(mReporter);
-                    mBody = HttpUtil.getBody(emitter, mReporter, mRawHeaders);
-                    if (mBody == null) {
-                        mBody = onUnknownBody(mRawHeaders);
-                        if (mBody == null)
-                            mBody = new UnknownRequestBody(mRawHeaders.get("Content-Type"));
-                    }
-                    mBody.parse(emitter, mReporter);
-                    onHeadersReceived();
+
+                return;
+            }
+            if (!"\r".equals(s)){
+                mRawHeaders.addLine(s);
+                return;
+            }
+
+            DataEmitter emitter = HttpUtil.getBodyDecoder(mSocket, Protocol.HTTP_1_1, mRawHeaders, true);
+            mBody = onBody(mRawHeaders);
+            if (mBody == null) {
+                mBody = HttpUtil.getBody(emitter, mReporter, mRawHeaders);
+                if (mBody == null) {
+                    mBody = onUnknownBody(mRawHeaders);
+                    if (mBody == null)
+                        mBody = new UnknownRequestBody(mRawHeaders.get("Content-Type"));
                 }
             }
-            catch (Exception ex) {
-                onCompleted(ex);
-            }
+            mBody.parse(emitter, mReporter);
+            onHeadersReceived();
         }
     };
 

@@ -1,14 +1,17 @@
 package com.koushikdutta.async.http;
 
 import android.net.Uri;
+import android.text.TextUtils;
 
 import com.koushikdutta.async.util.TaggedList;
 
 import java.net.URLDecoder;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Created by koush on 5/27/13.
@@ -88,6 +91,9 @@ public class Multimap extends LinkedHashMap<String, List<String>> implements Ite
         for (String part: parts) {
             String[] pair = part.split(assigner, 2);
             String key = pair[0].trim();
+            // watch for empty string or trailing delimiter
+            if (TextUtils.isEmpty(key))
+                continue;
             String v = null;
             if (pair.length > 1)
                 v = pair[1];
@@ -110,7 +116,7 @@ public class Multimap extends LinkedHashMap<String, List<String>> implements Ite
         return parse(header, ",", true, null);
     }
 
-    private static final StringDecoder QUERY_DECODER = new StringDecoder() {
+    public static final StringDecoder QUERY_DECODER = new StringDecoder() {
         @Override
         public String decode(String s) {
             return Uri.decode(s);
@@ -121,7 +127,7 @@ public class Multimap extends LinkedHashMap<String, List<String>> implements Ite
         return parse(query, "&", false, QUERY_DECODER);
     }
 
-    private static final StringDecoder URL_DECODER = new StringDecoder() {
+    public static final StringDecoder URL_DECODER = new StringDecoder() {
         @Override
         public String decode(String s) {
             return URLDecoder.decode(s);
@@ -142,5 +148,13 @@ public class Multimap extends LinkedHashMap<String, List<String>> implements Ite
             }
         }
         return ret.iterator();
+    }
+
+    public Map<String, String> toSingleMap() {
+        HashMap<String, String> ret = new HashMap<>();
+        for (String key: keySet()) {
+            ret.put(key, getString(key));
+        }
+        return ret;
     }
 }

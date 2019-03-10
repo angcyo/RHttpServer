@@ -1,5 +1,7 @@
 package com.koushikdutta.async.http;
 
+import android.text.TextUtils;
+
 import com.koushikdutta.async.AsyncServer;
 import com.koushikdutta.async.DataEmitter;
 import com.koushikdutta.async.FilteredDataEmitter;
@@ -32,8 +34,8 @@ public class HttpUtil {
                 if (StringBody.CONTENT_TYPE.equals(ct)) {
                     return new StringBody();
                 }
-                if (MultipartFormDataBody.CONTENT_TYPE.equals(ct)) {
-                    return new MultipartFormDataBody(values);
+                if (ct != null && ct.startsWith(MultipartFormDataBody.PRIMARY_TYPE)) {
+                    return new MultipartFormDataBody(contentType);
                 }
             }
         }
@@ -60,12 +62,13 @@ public class HttpUtil {
     }
     
     public static DataEmitter getBodyDecoder(DataEmitter emitter, Protocol protocol, Headers headers, boolean server) {
-        long _contentLength;
+        long _contentLength = -1;
         try {
-            _contentLength = Long.parseLong(headers.get("Content-Length"));
+            String header = headers.get("Content-Length");
+            if (header != null)
+                _contentLength = Long.parseLong(header);
         }
-        catch (Exception ex) {
-            _contentLength = -1;
+        catch (NumberFormatException ex) {
         }
         final long contentLength = _contentLength;
         if (-1 != contentLength) {
@@ -132,12 +135,12 @@ public class HttpUtil {
         return "keep-alive".equalsIgnoreCase(connection);
     }
 
-    public static int contentLength(Headers headers) {
+    public static long contentLength(Headers headers) {
         String cl = headers.get("Content-Length");
         if (cl == null)
             return -1;
         try {
-            return Integer.parseInt(cl);
+            return Long.parseLong(cl);
         }
         catch (NumberFormatException e) {
             return -1;

@@ -2,6 +2,7 @@ package com.koushikdutta.async.http.server;
 
 import android.annotation.TargetApi;
 import android.os.Build;
+import android.util.Log;
 
 import com.koushikdutta.async.AsyncSSLSocket;
 import com.koushikdutta.async.AsyncSSLSocketWrapper;
@@ -13,10 +14,10 @@ import com.koushikdutta.async.DataEmitter;
 import com.koushikdutta.async.Util;
 import com.koushikdutta.async.callback.CompletedCallback;
 import com.koushikdutta.async.callback.ListenCallback;
+import com.koushikdutta.async.callback.ValueCallback;
 import com.koushikdutta.async.http.Headers;
 import com.koushikdutta.async.http.HttpUtil;
 import com.koushikdutta.async.http.Multimap;
-import com.koushikdutta.async.http.Protocol;
 import com.koushikdutta.async.http.WebSocket;
 import com.koushikdutta.async.http.body.AsyncHttpRequestBody;
 
@@ -42,18 +43,35 @@ public class AsyncHttpServer extends AsyncHttpServerRouter {
     }
 
     protected void onRequest(HttpServerRequestCallback callback, AsyncHttpServerRequest request, AsyncHttpServerResponse response) {
-        if (callback != null)
-            callback.onRequest(request, response);
+        if (callback != null) {
+            try {
+                callback.onRequest(request, response);
+            }
+            catch (Exception e) {
+                Log.e("AsyncHttpServer", "request callback raised uncaught exception. Catching versus crashing process", e);
+                response.code(500);
+                response.end();
+            }
+        }
+    }
+
+    protected boolean isKeepAlive(AsyncHttpServerRequest request, AsyncHttpServerResponse response) {
+        return HttpUtil.isKeepAlive(response.getHttpVersion(), request.getHeaders());
     }
 
     protected AsyncHttpRequestBody onUnknownBody(Headers headers) {
         return new UnknownRequestBody(headers.get("Content-Type"));
     }
 
+    protected boolean isSwitchingProtocols(AsyncHttpServerResponse res) {
+        return res.code() == 101;
+    }
+
     ListenCallback mListenCallback = new ListenCallback() {
         @Override
         public void onAccepted(final AsyncSocket socket) {
-            AsyncHttpServerRequestImpl req = new AsyncHttpServerRequestImpl() {
+            final AsyncHttpServerRequestImpl req = new AsyncHttpServerRequestImpl() {
+                AsyncHttpServerRequestImpl self = this;
                 HttpServerRequestCallback requestCallback;
                 String fullPath;
                 String path;
@@ -61,6 +79,44 @@ public class AsyncHttpServer extends AsyncHttpServerRouter {
                 boolean requestComplete;
                 AsyncHttpServerResponseImpl res;
                 boolean hasContinued;
+                boolean handled;
+
+                final Runnable onFinally = new Runnable() {
+                    @Override
+                    public void run() {
+                        Log.i("HTTP", "Done");
+                    }
+                };
+
+                final ValueCallback<Exception> onException = new ValueCallback<Exception>() {
+                    @Override
+                    public void onResult(Exception value) {
+                        Log.e("HTTP", "exception", value);
+                    }
+                };
+
+                void onRequest() {
+                    AsyncHttpServer.this.onRequest(requestCallback, this, res);
+                }
+
+                @Override
+                protected AsyncHttpRequestBody onBody(Headers headers) {
+                    String statusLine = getStatusLine();
+                    String[] parts = statusLine.split(" ");
+                    fullPath = parts[1];
+                    path = URLDecoder.decode(fullPath.split("\\?")[0]);
+                    method = parts[0];
+                    RouteMatch route = route(method, path);
+                    if (route == null)
+                        return null;
+
+                    matcher = route.matcher;
+                    requestCallback = route.callback;
+
+                    if (route.bodyCallback == null)
+                        return null;
+                    return route.bodyCallback.getBody(headers);
+                }
 
                 @Override
                 protected AsyncHttpRequestBody onUnknownBody(Headers headers) {
@@ -92,16 +148,6 @@ public class AsyncHttpServer extends AsyncHttpServerRouter {
                     }
 //                    System.out.println(headers.toHeaderString());
                     
-                    String statusLine = getStatusLine();
-                    String[] parts = statusLine.split(" ");
-                    fullPath = parts[1];
-                    path = URLDecoder.decode(fullPath.split("\\?")[0]);
-                    method = parts[0];
-                    RouteMatch route = route(method, path);
-                    if (route != null) {
-                        matcher = route.matcher;
-                        requestCallback = route.callback;
-                    }
                     res = new AsyncHttpServerResponseImpl(socket, this) {
                         @Override
                         protected void report(Exception e) {
@@ -122,27 +168,25 @@ public class AsyncHttpServer extends AsyncHttpServerRouter {
                             handleOnCompleted();
                         }
                     };
-                    
-                    boolean handled = onRequest(this, res);
 
-                    if (requestCallback == null && !handled) {
+                    handled = AsyncHttpServer.this.onRequest(this, res);
+                    if (handled)
+                        return;
+
+                    if (requestCallback == null) {
                         res.code(404);
                         res.end();
                         return;
                     }
 
-                    if (!getBody().readFullyOnRequest()) {
-                        onRequest(requestCallback, this, res);
-                    }
-                    else if (requestComplete) {
-                        onRequest(requestCallback, this, res);
-                    }
+                    if (!getBody().readFullyOnRequest() || requestComplete)
+                        onRequest();
                 }
 
                 @Override
                 public void onCompleted(Exception e) {
                     // if the protocol was switched off http, ignore this request/response.
-                    if (res.code() == 101)
+                    if (isSwitchingProtocols(res))
                         return;
                     requestComplete = true;
                     super.onCompleted(e);
@@ -155,16 +199,22 @@ public class AsyncHttpServer extends AsyncHttpServerRouter {
                             mSocket.close();
                         }
                     });
+
+                    if (e != null) {
+                        mSocket.close();
+                        return;
+                    }
+
                     handleOnCompleted();
 
-                    if (getBody().readFullyOnRequest()) {
-                        onRequest(requestCallback, this, res);
+                    if (getBody().readFullyOnRequest() && !handled) {
+                        onRequest();
                     }
                 }
                 
                 private void handleOnCompleted() {
                     if (requestComplete && responseComplete) {
-                        if (HttpUtil.isKeepAlive(Protocol.HTTP_1_1, getHeaders())) {
+                        if (isKeepAlive(self, res)) {
                             onAccepted(socket);
                         }
                         else {
@@ -184,6 +234,11 @@ public class AsyncHttpServer extends AsyncHttpServerRouter {
                     if (parts.length < 2)
                         return new Multimap();
                     return Multimap.parseQuery(parts[1]);
+                }
+
+                @Override
+                public String getUrl() {
+                    return fullPath;
                 }
             };
             req.setSocket(socket);
@@ -261,7 +316,10 @@ public class AsyncHttpServer extends AsyncHttpServerRouter {
         mCodes.put(101, "Switching Protocols");
         mCodes.put(301, "Moved Permanently");
         mCodes.put(302, "Found");
+        mCodes.put(304, "Not Modified");
+        mCodes.put(400, "Bad Request");
         mCodes.put(404, "Not Found");
+        mCodes.put(500, "Internal Server Error");
     }
     
     public static String getResponseCodeDescription(int code) {

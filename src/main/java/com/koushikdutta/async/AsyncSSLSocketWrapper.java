@@ -4,11 +4,15 @@ import android.content.Context;
 import android.os.Build;
 import android.util.Base64;
 import android.util.Log;
+import android.util.Pair;
 
 import com.koushikdutta.async.callback.CompletedCallback;
+import com.koushikdutta.async.callback.ConnectCallback;
 import com.koushikdutta.async.callback.DataCallback;
 import com.koushikdutta.async.callback.ListenCallback;
 import com.koushikdutta.async.callback.WritableCallback;
+import com.koushikdutta.async.future.Cancellable;
+import com.koushikdutta.async.future.SimpleCancellable;
 import com.koushikdutta.async.http.SSLEngineSNIConfigurator;
 import com.koushikdutta.async.util.Allocator;
 import com.koushikdutta.async.util.StreamUtility;
@@ -60,6 +64,7 @@ import javax.net.ssl.SSLEngineResult;
 import javax.net.ssl.SSLEngineResult.HandshakeStatus;
 import javax.net.ssl.SSLEngineResult.Status;
 import javax.net.ssl.SSLException;
+import javax.net.ssl.SSLSession;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509TrustManager;
@@ -72,6 +77,9 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
     }
 
     static SSLContext defaultSSLContext;
+    static SSLContext trustAllSSLContext;
+    static TrustManager[] trustAllManagers;
+    static HostnameVerifier trustAllVerifier;
 
     AsyncSocket mSocket;
     BufferedDataSink mSink;
@@ -126,6 +134,27 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
                 ex2.printStackTrace();
             }
         }
+
+
+        try {
+            trustAllSSLContext = SSLContext.getInstance("TLS");
+            trustAllManagers = new TrustManager[] { new X509TrustManager() {
+                public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                    return new X509Certificate[0];
+                }
+
+                public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {
+                }
+
+                public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {
+                }
+            } };
+            trustAllSSLContext.init(null, trustAllManagers, null);
+            trustAllVerifier = (hostname, session) -> true;
+        }
+        catch (Exception ex2) {
+            ex2.printStackTrace();
+        }
     }
 
     public static SSLContext getDefaultSSLContext() {
@@ -154,6 +183,40 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
         } catch (SSLException e) {
             wrapper.report(e);
         }
+    }
+
+    public static Cancellable connectSocket(AsyncServer server, String host, int port, ConnectCallback callback) {
+        return connectSocket(server, host, port, false, callback);
+    }
+    public static Cancellable connectSocket(AsyncServer server, String host, int port, boolean trustAllCerts, ConnectCallback callback) {
+        SimpleCancellable cancellable = new SimpleCancellable();
+        Cancellable connect = server.connectSocket(host, port, (ex, netSocket) -> {
+            if (ex != null) {
+                if (cancellable.setComplete())
+                    callback.onConnectCompleted(ex, null);
+                return;
+            }
+
+            handshake(netSocket, host, port,
+                    (trustAllCerts ? trustAllSSLContext : defaultSSLContext).createSSLEngine(host, port),
+                    trustAllCerts ? trustAllManagers : null,
+                    trustAllCerts ? trustAllVerifier : null,
+                    true, (e, socket) -> {
+                if (!cancellable.setComplete()) {
+                    if (socket != null)
+                        socket.close();
+                    return;
+                }
+
+                if (e != null)
+                    callback.onConnectCompleted(e, null);
+                else
+                    callback.onConnectCompleted(null, socket);
+            });
+        });
+
+        cancellable.setParent(connect);
+        return cancellable;
     }
 
     boolean mEnded;
@@ -599,41 +662,49 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
         return new JcaX509CertificateConverter().setProvider(bcProvider).getCertificate(certBuilder.build(contentSigner));
     }
 
-    public static AsyncServerSocket listenSecure(final Context context, final AsyncServer server, final String subjectName, final InetAddress host, final int port, final ListenCallback handler) {
-        final ObjectHolder<AsyncServerSocket> holder = new ObjectHolder<>();
+    public static Pair<KeyPair, Certificate> selfSignCertificate(final Context context, String subjectName) throws Exception {
+        File keyPath = context.getFileStreamPath(subjectName + "-key.txt");
+        KeyPair pair;
+        Certificate cert;
+        try {
+            String[] keyParts = StreamUtility.readFile(keyPath).split("\n");
+            X509EncodedKeySpec pub = new X509EncodedKeySpec(Base64.decode(keyParts[0], 0));
+            PKCS8EncodedKeySpec priv = new PKCS8EncodedKeySpec(Base64.decode(keyParts[1], 0));
+
+            cert = CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(Base64.decode(keyParts[2], 0)));
+
+            KeyFactory fact = KeyFactory.getInstance("RSA");
+
+            pair = new KeyPair(fact.generatePublic(pub), fact.generatePrivate(priv));
+
+        }
+        catch (Exception e) {
+            KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
+            keyGen.initialize(2048);
+            pair = keyGen.generateKeyPair();
+
+            cert = selfSign(pair, subjectName);
+
+            StreamUtility.writeFile(keyPath,
+                    Base64.encodeToString(pair.getPublic().getEncoded(), Base64.NO_WRAP)
+                            + "\n"
+                            + Base64.encodeToString(pair.getPrivate().getEncoded(), Base64.NO_WRAP)
+                            + "\n"
+                            + Base64.encodeToString(cert.getEncoded(), Base64.NO_WRAP));
+        }
+
+        return new Pair<>(pair, cert);
+    }
+
+    public static AsyncSSLServerSocket listenSecure(final Context context, final AsyncServer server, final String subjectName, final InetAddress host, final int port, final ListenCallback handler) {
+        final ObjectHolder<AsyncSSLServerSocket> holder = new ObjectHolder<>();
         server.run(new Runnable() {
             @Override
             public void run() {
                 try {
-                    File keyPath = context.getFileStreamPath(subjectName + "-key.txt");
-                    KeyPair pair;
-                    Certificate cert;
-                    try {
-                        String[] keyParts = StreamUtility.readFile(keyPath).split("\n");
-                        X509EncodedKeySpec pub = new X509EncodedKeySpec(Base64.decode(keyParts[0], 0));
-                        PKCS8EncodedKeySpec priv = new PKCS8EncodedKeySpec(Base64.decode(keyParts[1], 0));
-
-                        cert = CertificateFactory.getInstance("X.509").generateCertificate(new ByteArrayInputStream(Base64.decode(keyParts[2], 0)));
-
-                        KeyFactory fact = KeyFactory.getInstance("RSA");
-
-                        pair = new KeyPair(fact.generatePublic(pub), fact.generatePrivate(priv));
-
-                    }
-                    catch (Exception e) {
-                        KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-                        keyGen.initialize(2048);
-                        pair = keyGen.generateKeyPair();
-
-                        cert = selfSign(pair, subjectName);
-
-                        StreamUtility.writeFile(keyPath,
-                                Base64.encodeToString(pair.getPublic().getEncoded(), Base64.NO_WRAP)
-                                + "\n"
-                                + Base64.encodeToString(pair.getPrivate().getEncoded(), Base64.NO_WRAP)
-                                + "\n"
-                                + Base64.encodeToString(cert.getEncoded(), Base64.NO_WRAP));
-                    }
+                    Pair<KeyPair, Certificate> keyCert = selfSignCertificate(context, subjectName);
+                    KeyPair pair = keyCert.first;
+                    Certificate cert = keyCert.second;
 
                     holder.held = listenSecure(server, pair.getPrivate(), cert, host, port, handler);
                 }
@@ -645,7 +716,7 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
         return holder.held;
     }
 
-    public static AsyncServerSocket listenSecure(AsyncServer server, String keyDer, String certDer, final InetAddress host, final int port, final ListenCallback handler) {
+    public static AsyncSSLServerSocket listenSecure(AsyncServer server, String keyDer, String certDer, final InetAddress host, final int port, final ListenCallback handler) {
         return listenSecure(server, Base64.decode(keyDer, Base64.DEFAULT), Base64.decode(certDer, Base64.DEFAULT), host, port, handler);
     }
 
@@ -654,8 +725,8 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
         T held;
     }
 
-    public static AsyncServerSocket listenSecure(final AsyncServer server, final byte[] keyDer, final byte[] certDer, final InetAddress host, final int port, final ListenCallback handler) {
-        final ObjectHolder<AsyncServerSocket> holder = new ObjectHolder<>();
+    public static AsyncSSLServerSocket listenSecure(final AsyncServer server, final byte[] keyDer, final byte[] certDer, final InetAddress host, final int port, final ListenCallback handler) {
+        final ObjectHolder<AsyncSSLServerSocket> holder = new ObjectHolder<>();
         server.run(new Runnable() {
             @Override
             public void run() {
@@ -675,8 +746,8 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
         return holder.held;
     }
 
-    public static AsyncServerSocket listenSecure(final AsyncServer server, final PrivateKey pk, final Certificate cert, final InetAddress host, final int port, final ListenCallback handler) {
-        final ObjectHolder<AsyncServerSocket> holder = new ObjectHolder<>();
+    public static AsyncSSLServerSocket listenSecure(final AsyncServer server, final PrivateKey pk, final Certificate cert, final InetAddress host, final int port, final ListenCallback handler) {
+        final ObjectHolder<AsyncSSLServerSocket> holder = new ObjectHolder<>();
         server.run(new Runnable() {
             @Override
             public void run() {
@@ -695,7 +766,28 @@ public class AsyncSSLSocketWrapper implements AsyncSocketWrapper, AsyncSSLSocket
                     SSLContext sslContext = SSLContext.getInstance("TLS");
                     sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
 
-                    holder.held = listenSecure(server, sslContext, host, port, handler);
+                    final AsyncServerSocket socket = listenSecure(server, sslContext, host, port, handler);
+                    holder.held = new AsyncSSLServerSocket() {
+                        @Override
+                        public PrivateKey getPrivateKey() {
+                            return pk;
+                        }
+
+                        @Override
+                        public Certificate getCertificate() {
+                            return cert;
+                        }
+
+                        @Override
+                        public void stop() {
+                            socket.stop();
+                        }
+
+                        @Override
+                        public int getLocalPort() {
+                            return socket.getLocalPort();
+                        }
+                    };
                 }
                 catch (Exception e) {
                     handler.onCompleted(e);
