@@ -117,7 +117,78 @@ public class RServer implements HttpServerRequestCallback {
 
     @Override
     public void onRequest(AsyncHttpServerRequest request, AsyncHttpServerResponse response) {
-        StringBuilder logBuilder = new StringBuilder();
+        if (serverListener != null) {
+            serverListener.onRequest(request, response);
+            return;
+        }
+
+        AsyncHttpRequestBody body = request.getBody();
+
+        //AsyncServer 线程
+        log("进来了，哈哈" + request.getHeaders().get("Host"));
+        StringBuilder builder = new StringBuilder();
+
+        String ua = request.getHeaders().get("user-agent");
+        //        response.send(response.code() + " :" + request.getHeaders().get("Host") + " :" + request.getPath() + " :" + request.getBody());
+        //response.redirect("http://www.baidu.com");
+//        response.end();
+
+//        String uri = request.getPath();
+//        //这个是获取header参数的地方，一定要谨记哦
+        Multimap headers = request.getHeaders().getMultiMap();
+//
+//        //注意：这个地方是获取post请求的参数的地方，一定要谨记哦
+        Multimap parms = ((AsyncHttpRequestBody<Multimap>) body).get();
+//
+
+//        response.send("a</br>b");
+//        response.end();
+
+        builder.append(headers);
+        builder.append("</br>");
+        builder.append(parms);
+        builder.append("</br>");
+
+        if (ua.contains("MQQBrowser")) {
+            //腾讯tbs x5内核浏览器,腾讯体系
+            if (ua.contains("QQ/")) {
+                builder.append("QQ客户端");
+
+                response.redirect("http://pay.hotapp.cn/108659959");
+            } else if (ua.contains("MicroMessenger")) {
+                builder.append("微信客户端");
+
+                response.redirect("wxp://f2f0nuJx2qnA2ibH8hKgVQ4c2dWHsyy3-tej");
+            }
+        } else if (ua.contains("UCBrowser")) {
+            //UC 浏览器内核,支付宝体系
+            if (ua.contains("AlipayClient")) {
+                builder.append("支付宝客户端");
+
+                response.redirect("http://pay.hotapp.cn/108659959");
+            }
+        }
+
+        //没次请求只能send 一次, 第二次send 无效.
+        response.send(builder.toString());
+        response.end();
+    }
+
+    /**
+     * /
+     * /all
+     */
+    public static String getRequestPath(AsyncHttpServerRequest request) {
+        String decode = "";
+        try {
+            decode = URLDecoder.decode(request.getPath(), "utf-8");
+        } catch (UnsupportedEncodingException e) {
+            e.printStackTrace();
+        }
+        return decode;
+    }
+
+    public static void logRequest(AsyncHttpServerRequest request, StringBuilder logBuilder) {
         try {
             logBuilder.append("请求:")
                     .append(request.getMethod())
@@ -185,61 +256,7 @@ public class RServer implements HttpServerRequestCallback {
             }
         }
 
-        L.i(logBuilder);
-
-        if (serverListener != null) {
-            serverListener.onRequest(request, response);
-            return;
-        }
-
-        //AsyncServer 线程
-        log("进来了，哈哈" + request.getHeaders().get("Host"));
-        StringBuilder builder = new StringBuilder();
-
-        String ua = request.getHeaders().get("user-agent");
-        //        response.send(response.code() + " :" + request.getHeaders().get("Host") + " :" + request.getPath() + " :" + request.getBody());
-        //response.redirect("http://www.baidu.com");
-//        response.end();
-
-//        String uri = request.getPath();
-//        //这个是获取header参数的地方，一定要谨记哦
-        Multimap headers = request.getHeaders().getMultiMap();
-//
-//        //注意：这个地方是获取post请求的参数的地方，一定要谨记哦
-        Multimap parms = ((AsyncHttpRequestBody<Multimap>) body).get();
-//
-
-//        response.send("a</br>b");
-//        response.end();
-
-        builder.append(headers);
-        builder.append("</br>");
-        builder.append(parms);
-        builder.append("</br>");
-
-        if (ua.contains("MQQBrowser")) {
-            //腾讯tbs x5内核浏览器,腾讯体系
-            if (ua.contains("QQ/")) {
-                builder.append("QQ客户端");
-
-                response.redirect("http://pay.hotapp.cn/108659959");
-            } else if (ua.contains("MicroMessenger")) {
-                builder.append("微信客户端");
-
-                response.redirect("wxp://f2f0nuJx2qnA2ibH8hKgVQ4c2dWHsyy3-tej");
-            }
-        } else if (ua.contains("UCBrowser")) {
-            //UC 浏览器内核,支付宝体系
-            if (ua.contains("AlipayClient")) {
-                builder.append("支付宝客户端");
-
-                response.redirect("http://pay.hotapp.cn/108659959");
-            }
-        }
-
-        //没次请求只能send 一次, 第二次send 无效.
-        response.send(builder.toString());
-        response.end();
+        //L.i(logBuilder);
     }
 
     public static void log(StringBuilder builder, Multimap multimap) {
